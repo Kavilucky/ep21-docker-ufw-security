@@ -1,0 +1,99 @@
+# =============================================================================
+#  docker-compose.secure.yml  |  ByteAutomate AI  |  @ByteAutomate_AI
+#  Эталонный конфиг: база данных не торчит в интернет даже при включённом UFW.
+#
+#  Три уровня защиты:
+#    УРОВЕНЬ 1. Всё, что публикуется, привязано к 127.0.0.1 (сервис adminer).
+#               Без адреса Docker публикует порт на 0.0.0.0 в обход UFW.
+#    УРОВЕНЬ 2. Сеть базы с `internal: true`: у неё нет выхода наружу и нет доступа
+#               снаружи. У базы нет блока `ports:` вообще.
+#    УРОВЕНЬ 3. Сайт выходит в интернет через Cloudflare Tunnel (cloudflared):
+#               исходящее соединение, порты 80 и 443 на сервере наружу не нужны.
+#
+#  Без подписки: Docker Compose, PostgreSQL и cloudflared не требуют абонентской
+#  платы; нужны свой сервер и аккаунт Cloudflare (условия тарифа проверяйте на сайте
+#  сервиса, они могут измениться).
+#
+#  ВАЖНО про бэкап: перед любыми изменениями сделайте копию базы по правилу 3-2-1
+#  (3 копии, 2 разных носителя, 1 вне сервера). Копия на том же диске второй копией
+#  не считается. Оригиналы не удаляйте, пока копия не проверена восстановлением.
+#
+#  Подготовка:
+#    1) Создайте файл .env рядом с этим файлом (он не должен попасть в git):
+#         POSTGRES_PASSWORD=придумайте-длинный-пароль
+#         CLOUDFLARE_TUNNEL_TOKEN=токен-из-панели-Cloudflare-Zero-Trust
+#    2) В панели Cloudflare у туннеля укажите сервис http://web:80 (имя сервиса в сети).
+#    3) Запуск: docker compose -f docker-compose.secure.yml up -d
+#    4) Админка базы (по желанию, профиль debug):
+#         docker compose -f docker-compose.secure.yml --profile debug up -d adminer
+#         ssh -L 8080:127.0.0.1:8080 user@ваш-сервер     # затем http://127.0.0.1:8080
+#       (или заходите через WireGuard; наружу порт 8080 не открывается.)
+#  Проверка: sudo bash audit-docker-ufw.sh  и сканирование снаружи (nmap с другого хоста).
+#
+#  Это шаблон: образы web и db подставьте свои. Пример: живой запуск на сервере
+#  автором не выполнялся, версии образов закрепите сами.
+# =============================================================================
+
+name: secure-stack
+
+services:
+  # ---- база данных: УРОВЕНЬ 2, портов наружу нет ----
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?задайте POSTGRES_PASSWORD в файле .env}
+      POSTGRES_DB: app
+      POSTGRES_USER: app
+    volumes:
+      - db_data:/var/lib/postgresql/data
+    networks:
+      - db_net
+    # Блока ports: у базы НЕТ. Не добавляйте "5432:5432": это и есть уязвимость.
+
+  # ---- приложение: видит базу, наружу не публикуется ----
+  web:
+    image: nginx:1.27-alpine        # замените на ваше приложение
+    restart: unless-stopped
+    depends_on:
+      - db
+    networks:
+      - db_net
+      - app_net
+    # ports: не указан: к сайту ведёт только туннель (УРОВЕНЬ 3)
+
+  # ---- УРОВЕНЬ 3: Cloudflare Tunnel вместо открытых 80/443 ----
+  cloudflared:
+    image: cloudflare/cloudflared:latest   # закрепите конкретную версию после проверки
+    restart: unless-stopped
+    command: tunnel --no-autoupdate run
+    environment:
+      TUNNEL_TOKEN: ${CLOUDFLARE_TUNNEL_TOKEN:?задайте CLOUDFLARE_TUNNEL_TOKEN в файле .env}
+    depends_on:
+      - web
+    networks:
+      - app_net         # доступ к web
+      - egress_net      # исходящее соединение к Cloudflare
+
+  # ---- УРОВЕНЬ 1: админка только на 127.0.0.1 (включается профилем debug) ----
+  adminer:
+    image: adminer:4
+    profiles: ["debug"]
+    restart: "no"
+    depends_on:
+      - db
+    ports:
+      - "127.0.0.1:8080:8080"     # обязательно с адресом 127.0.0.1, иначе порт откроется миру
+    networks:
+      - db_net
+      - egress_net      # нужна обычная сеть, чтобы Docker опубликовал порт на 127.0.0.1
+
+networks:
+  db_net:
+    internal: true      # УРОВЕНЬ 2: сеть базы без доступа снаружи и без выхода наружу
+  app_net:
+    internal: true      # между туннелем и сайтом тоже незачем выходить наружу
+  egress_net: {}        # обычная сеть: исходящий трафик cloudflared и привязка adminer к 127.0.0.1
+
+volumes:
+  db_data: {}

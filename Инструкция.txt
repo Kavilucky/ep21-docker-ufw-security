@@ -1,0 +1,9 @@
+﻿Docker + UFW: порт закрыт, а база открыта.
+1. Прочитай скрипт audit-docker-ufw.sh: он только читает ufw status, iptables -t nat -L DOCKER -n -v и ss -tulnp. Запусти на сервере: sudo bash audit-docker-ufw.sh. Одной строкой: curl -fsSL https://raw.githubusercontent.com/Kavilucky/ep21-docker-ufw-security/main/audit-docker-ufw.sh -o audit-docker-ufw.sh && sudo bash audit-docker-ufw.sh
+2. Строки CRITICAL EXPOSED означают порт на 0.0.0.0, открытый в обход UFW. SAFE LOCAL означает 127.0.0.1. Под каждой критичной строкой скрипт печатает команду FIX.
+3. Исправь по docker-compose.secure.yml: порты только с 127.0.0.1, сеть базы internal: true, сайт через Cloudflare Tunnel без открытых портов 80 и 443. Без подписки: нужны свой сервер и аккаунт Cloudflare, условия тарифа проверяй на сайте сервиса.
+4. Проверь снаружи: nmap -Pn -p 5432 адрес-сервера с другого хоста. Аудит видит только локальные правила.
+5. Честное ограничение: скрипт проверен на подставных данных, живой запуск на сервере с Docker автором не выполнялся. Проверяется IPv4 nat, IPv6, чистый nftables и Podman не проверялись.
+6. Перед любыми правками сделай копию базы по схеме 3-2-1: копия на внешнем диске, оригиналы не удалять, пока копия не проверена.
+Репозиторий этого набора на GitHub: https://github.com/Kavilucky/ep21-docker-ufw-security
+Вопросы и внедрение под ключ: канал @ByteAutomate_AI, контакт @konstantin_100.
